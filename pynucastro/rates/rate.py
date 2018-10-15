@@ -8,6 +8,9 @@ import io
 import numpy as np
 import matplotlib.pyplot as plt
 import collections
+import pandas as pd
+import seaborn as sns  # Xinlong li
+sns.set()
 
 from pynucastro.nucdata import UnidentifiedElement, PeriodicTable
 
@@ -238,7 +241,7 @@ class Library(object):
     pynucastro_rates_dir = os.path.join(pynucastro_dir,
                                         'library')
     pynucastro_tabular_dir = os.path.join(pynucastro_rates_dir,
-                                          'tabular')
+                                          'tabular_weak')
 
     def __init__(self, libfile=None, rates=None, read_library=True):
         self._library_file = libfile
@@ -669,6 +672,9 @@ class Rate(object):
         self._set_rhs_properties()
         self._set_screening()
         self._set_print_representation()
+        
+        if self.tabular == True:
+            self.get_tabular_rate()          #Xinlong Li
 
     def __repr__(self):
         return self.string
@@ -1060,11 +1066,25 @@ class Rate(object):
 
     def eval(self, T):
         """ evauate the reaction rate for temperature T """
-        tf = Tfactors(T)
-        r = 0.0
-        for s in self.sets:
-            f = s.f()
-            r += f(tf)
+        if self.tabular == False:
+            tf = Tfactors(T)
+            r = 0.0
+            for s in self.sets:
+                f = s.f()
+                r += f(tf)
+        
+        if self.tabular == True:
+            df = self.tabular_data_table.apply(pd.to_numeric) # convert from str to float
+            # find the nearest value of T and rhoY in the data table
+            T_nearest = (np.array(df["T9"]))[np.abs((np.array(df["T9"])) - T/1e9).argmin()]
+            df1 = df.loc[df["T9"]==T_nearest]
+            rhoY_nearest = (np.array(df1["log(rhoY)"]))[np.abs((np.array(df1["log(rhoY)"])) - np.log10(rhoY)).argmin()]
+            df2 = df1.loc[df1["log(rhoY)"]==rhoY_nearest]
+            
+            if self.reactants[0].Z > self.products[0].Z:
+                r = np.power(10,float(df2["EC_rate"]))     #
+            else:
+                r = np.power(10,float(df2["B-_rate"]))
 
         return r
 
@@ -1085,23 +1105,81 @@ class Rate(object):
     def plot(self, Tmin=1.e7, Tmax=1.e10):
         """plot the rate's temperature sensitivity vs temperature"""
 
-        temps = np.logspace(np.log10(Tmin), np.log10(Tmax), 100)
-        r = np.zeros_like(temps)
-
-        for n, T in enumerate(temps):
-            r[n] = self.eval(T)
-
-        plt.loglog(temps, r)
-
-        plt.xlabel(r"$T$")
-
-        if self.dens_exp == 0:
-            plt.ylabel(r"\tau")
-        elif self.dens_exp == 1:
-            plt.ylabel(r"$N_A <\sigma v>$")
-        elif self.dens_exp == 2:
-            plt.ylabel(r"$N_A^2 <n_a n_b n_c v>$")
-
-        plt.title(r"{}".format(self.pretty_string))
-
-        plt.show()
+        if self.tabular == False:
+            temps = np.logspace(np.log10(Tmin), np.log10(Tmax), 100)
+            r = np.zeros_like(temps)
+            
+            for n, T in enumerate(temps):
+                r[n] = self.eval(T)
+                
+            plt.loglog(temps, r)
+            plt.xlabel(r"$T$")
+            
+            if self.dens_exp == 0:
+                plt.ylabel(r"\tau")
+            elif self.dens_exp == 1:
+                plt.ylabel(r"$N_A <\sigma v>$")
+            elif self.dens_exp == 2:
+                plt.ylabel(r"$N_A^2 <n_a n_b n_c v>$")
+                
+            plt.title(r"{}".format(self.pretty_string))
+            plt.show()
+            
+        if self.tabular == True:
+            df = self.tabular_data_table.apply(pd.to_numeric) # convert from str to float
+            
+            df1 = df.loc[df['T9'] <= Tmax/1e9]
+            df2 = df1.loc[df1['T9'] >= Tmin/1e9]
+            df3 = df2.loc[df2['log(rhoY)'] <= np.log10(rhoYmax)]
+            df4 = df3.loc[df3['log(rhoY)'] >= np.log10(rhoYmin)]
+            
+            if self.reactants[0].Z > self.products[0].Z:
+                pivotted = df4.pivot('log(rhoY)','T9','EC_rate')
+                #pivotted_log = np.log10(pivotted)
+                # generate heat map depend on T and rhoY
+            else:
+                pivotted = df4.pivot('log(rhoY)','T9','B-_rate')
+            
+            hmap = sns.heatmap(pivotted,cmap='RdBu')#,xticklabels=4,yticklabels=5)#,vmin=1e-20, vmax=1)
+            hmap.invert_yaxis()  
+            hmap.set_yticklabels(hmap.get_yticklabels(), rotation=0) 
+            plt.xlabel("$T$ [GK]")
+            plt.ylabel("$lg(\\rho Y)$ [g/cm3]")
+            plt.title(r"{}".format(self.pretty_string)+"\n"+"electron-capture/beta rate in log10(1/s)")
+            plt.show()
+        
+    def get_tabular_rate(self):    # new fundtion by Xinlong Li
+        """read the rate data from .dat file """
+        
+        # find .dat file and read it
+        self.table_path = Library._find_rate_file(self.table_file)
+        tabular_file = open(self.table_path,"r")
+        t_data = tabular_file.readlines()  # t_data is a list. each element is a line of "23Ne...dat"
+        tabular_file.close()
+        
+        # delete header lines
+        del t_data[0:self.table_header_lines]  
+        
+        # change the list ["1.23 3.45 5.67\n"] into the list ["1.23","3.45","5.67"]
+        t_data2d = []
+        for i in range(len(t_data)):
+            t_data2d.append(re.split(r"[ ]",t_data[i].strip('\n')))
+        
+        # delete all the "" in each element of data1
+        for i in range(len(t_data2d)):
+            while '' in t_data2d[i]:
+                t_data2d[i].remove('')
+            
+        df = pd.DataFrame(t_data2d)
+        df1 = df.dropna()  # drop empty lines
+        df1.columns = ['A','Z','T9','log(rhoY)','mu_e','B+_rate','EC_rate',
+                                           'nu_rate','B-_rate','E+C_rate','nubar_rate','tableID']
+        if self.reactants[0].Z > self.products[0].Z:
+            self.tabular_data_table = df1.drop(columns=['A','Z','B-_rate','E+C_rate','nubar_rate','tableID'])
+        else:
+            self.tabular_data_table = df1.drop(columns=['A','Z','B+_rate','EC_rate','nu_rate','tableID'])
+        
+        for item in self.tabular_data_table.columns:
+            if self.tabular_data_table[item][0] == '---':
+                df2 = self.tabular_data_table.drop(columns=[item])
+                self.tabular_data_table = df2
