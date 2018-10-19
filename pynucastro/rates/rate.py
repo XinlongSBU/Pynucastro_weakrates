@@ -241,7 +241,7 @@ class Library(object):
     pynucastro_rates_dir = os.path.join(pynucastro_dir,
                                         'library')
     pynucastro_tabular_dir = os.path.join(pynucastro_rates_dir,
-                                          'tabular_weak')
+                                          'tabular')
 
     def __init__(self, libfile=None, rates=None, read_library=True):
         self._library_file = libfile
@@ -1076,15 +1076,11 @@ class Rate(object):
         if self.tabular == True:
             df = self.tabular_data_table.apply(pd.to_numeric) # convert from str to float
             # find the nearest value of T and rhoY in the data table
-            T_nearest = (np.array(df["T9"]))[np.abs((np.array(df["T9"])) - T/1e9).argmin()]
-            df1 = df.loc[df["T9"]==T_nearest]
-            rhoY_nearest = (np.array(df1["log(rhoY)"]))[np.abs((np.array(df1["log(rhoY)"])) - np.log10(rhoY)).argmin()]
-            df2 = df1.loc[df1["log(rhoY)"]==rhoY_nearest]
-            
-            if self.reactants[0].Z > self.products[0].Z:
-                r = np.power(10,float(df2["EC_rate"]))     #
-            else:
-                r = np.power(10,float(df2["B-_rate"]))
+            T_nearest = (np.array(df["T[K]"]))[np.abs((np.array(df["T[K]"])) - T).argmin()]
+            df1 = df.loc[df["T[K]"]==T_nearest]
+            rhoY_nearest = (np.array(df1["rhoY[g/cm3]"]))[np.abs((np.array(df1["rhoY[g/cm3]"])) - rhoY).argmin()]
+            df2 = df1.loc[df1["rhoY[g/cm3]"]==rhoY_nearest]
+            r = float(df2["e-cap/B-decay_rate[1/s]"])
 
         return r
 
@@ -1128,24 +1124,20 @@ class Rate(object):
         if self.tabular == True:
             df = self.tabular_data_table.apply(pd.to_numeric) # convert from str to float
             
-            df1 = df.loc[df['T9'] <= Tmax/1e9]
-            df2 = df1.loc[df1['T9'] >= Tmin/1e9]
-            df3 = df2.loc[df2['log(rhoY)'] <= np.log10(rhoYmax)]
-            df4 = df3.loc[df3['log(rhoY)'] >= np.log10(rhoYmin)]
+            df1 = df.loc[df['T[K]'] <= Tmax]
+            df2 = df1.loc[df1['T[K]'] >= Tmin]
+            df3 = df2.loc[df2['rhoY[g/cm3]'] <= rhoYmax]
+            df4 = df3.loc[df3['rhoY[g/cm3]'] >= rhoYmin]
             
-            if self.reactants[0].Z > self.products[0].Z:
-                pivotted = df4.pivot('log(rhoY)','T9','EC_rate')
-                #pivotted_log = np.log10(pivotted)
-                # generate heat map depend on T and rhoY
-            else:
-                pivotted = df4.pivot('log(rhoY)','T9','B-_rate')
+            piv = df4.pivot('rhoY[g/cm3]','T[K]','e-cap/B-decay_rate[1/s]')
+            piv_log = np.log10(piv)
             
-            hmap = sns.heatmap(pivotted,cmap='RdBu')#,xticklabels=4,yticklabels=5)#,vmin=1e-20, vmax=1)
+            hmap = sns.heatmap(piv_log,cmap='RdBu')#,xticklabels=4,yticklabels=5)#,vmin=1e-20, vmax=1)
             hmap.invert_yaxis()  
             hmap.set_yticklabels(hmap.get_yticklabels(), rotation=0) 
-            plt.xlabel("$T$ [GK]")
-            plt.ylabel("$lg(\\rho Y)$ [g/cm3]")
-            plt.title(r"{}".format(self.pretty_string)+"\n"+"electron-capture/beta rate in log10(1/s)")
+            plt.xlabel("$T$ [K]")
+            plt.ylabel("$\\rho Y$ [g/cm3]")
+            plt.title(r"{}".format(self.pretty_string)+"\n"+"electron-capture/beta-decay rate in log10(1/s)")
             plt.show()
         
     def get_tabular_rate(self):    # new fundtion by Xinlong Li
@@ -1172,14 +1164,6 @@ class Rate(object):
             
         df = pd.DataFrame(t_data2d)
         df1 = df.dropna()  # drop empty lines
-        df1.columns = ['A','Z','T9','log(rhoY)','mu_e','B+_rate','EC_rate',
-                                           'nu_rate','B-_rate','E+C_rate','nubar_rate','tableID']
-        if self.reactants[0].Z > self.products[0].Z:
-            self.tabular_data_table = df1.drop(columns=['A','Z','B-_rate','E+C_rate','nubar_rate','tableID'])
-        else:
-            self.tabular_data_table = df1.drop(columns=['A','Z','B+_rate','EC_rate','nu_rate','tableID'])
-        
-        for item in self.tabular_data_table.columns:
-            if self.tabular_data_table[item][0] == '---':
-                df2 = self.tabular_data_table.drop(columns=[item])
-                self.tabular_data_table = df2
+        df1.columns = ['rhoY[g/cm3]','T[K]','mu[erg]','dQ[erg]','Vs[erg]',
+                                           'e-cap/B-decay_rate[1/s]','nu-energy-loss[erg/s]','gamma-energy[erg/s]']
+        self.tabular_data_table = df1
